@@ -143,7 +143,7 @@ MLE <- function(xa, xd, y_mat) {
   X_mat <- cbind(1, xa, xd)
   beta_hat <- ginv(t(X_mat) %*% X_mat) %*% t(X_mat) %*% y_mat
 }
-fstat_calc <- function(y_mat, xa, xd, MLE) {
+fstat_calc <- function(xa, xd, MLE, y_mat) {
   X_mat <- cbind(1, xa, xd)
   y_hat <- X_mat %*% MLE
   SSM <- sum((y_hat - mean(y_mat)) ^ 2)
@@ -154,34 +154,26 @@ fstat_calc <- function(y_mat, xa, xd, MLE) {
   return(Fstat)
 }
 
-
 # gene 1
-# check the degrees of freedom numbers
-MLE_result_col1 <- matrix(NA, nrow = 3, ncol = ncol(geno))
-for(i in 1:ncol(geno)){
-  MLE_result_col1[,i] <- MLE(x_a[,i], x_d[,i], as.numeric(as.matrix(pheno[, 1])))
-}
+mle_gene1 <- map2(data.frame(x_a), data.frame(x_d), MLE, as.numeric(as.matrix(pheno[, 1])))
+fstat_mle_list_test <- pmap(list(xa = data.frame(x_a), xd = data.frame(x_d), MLE = mle_gene1), fstat_calc, pheno[, 1])
+fstat_mle_list_smpl <- flatten_dbl(fstat_mle_list_test)
+pval_fstat_mle_list <- pf(fstat_mle_list_smpl, 2, 344 - 3, lower.tail = FALSE)
 
-test_gene1 <- map2(x_a, x_d, MLE, as.numeric(as.matrix(pheno[, 1])))
-
-
-fstat_result_col1 <- matrix(NA, nrow = 1, ncol = ncol(geno))
-for(i in 1:ncol(geno)) {
-  fstat_result_col1[i] <- fstat_calc(pheno[, 1], x_a[, i], x_d[, i], MLE_result_col1[, i])
-}
-pval_result_col1 <- pf(fstat_result_col1, 2, 344 - 3, lower.tail = FALSE)
-hist(pval_result_col1, breaks = 20, 
+hist(pval_fstat_mle_list, breaks = 20, 
      xlab = "p-values", 
      ylab = "Number of p-values", 
      main = "Distribution of p-values")
-man_plot_data_col1 <- as.data.frame(cbind(1:ncol(geno), t(pval_result_col1)))
+
+man_plot_data_col1 <- as.data.frame(cbind(1:ncol(geno), pval_fstat_mle_list))
 colnames(man_plot_data_col1) <- c("x", "pval")
 ggplot(man_plot_data_col1, aes(x = x, y = -log(pval, base = 10))) +
   geom_point() +
   ggtitle("Manhattan Plot, Gene 1") +
   xlab("Genotype Position") +
   ylab("-log10(pVal)")
-summary(which(pval_result_col1 < 0.05 / ncol(geno)))
+summary(which(pval_fstat_mle_list < 0.05 / ncol(geno)))
+
 expected.pvals <- -log10(seq(from=0,to=1, length.out = length(man_plot_data_col1$pval)))
 observed.pvals <- -log10(man_plot_data_col1$pval)
 expected.sorted <- sort(expected.pvals)
