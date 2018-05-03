@@ -9,20 +9,19 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-Packages:
-```{r comment=NA}
-library(dplyr)
+```{r packages, comment=NA, include=FALSE}
+library(dplyr)  
 library(tidyr)
 library(tibble)
 library(broom)
+library(purrr)
 library(ggplot2)
 library(cowplot)
 library(GGally)
 library(MASS)
 ```
 
-Data:
-```{r comment=NA}
+```{r data, comment=NA}
 # read in data
 geno <- read.csv("QG18_genotypes.csv", row.names = 1)
 pheno <- read.csv("QG18_phenotypes.csv", row.names = 1)
@@ -35,6 +34,17 @@ anyNA(pheno)
 anyNA(covars)
 anyNA(snp_info)
 anyNA(gene_info)
+# are there approximately equal numbers of people in each covariate group?
+table(covars$Population)
+table(covars$Sex)
+# does the coding of the genotypes makes sense across all the data?
+max(as.matrix(geno))
+min(as.matrix(geno))
+# calculate allele frequency
+geno_sums <- sapply(geno, function(x) sum(x) / (nrow(geno) * 2))
+# any genotypes need to be removed because of MAF < 5%?
+any(geno_sums < 0.05 | geno_sums > 0.95)
+# no genotypes need to be removed because of MAF < 5%
 ```
 
 Phenotype plots:
@@ -43,9 +53,9 @@ pheno %>%
   rownames_to_column("sample") %>% 
   gather("probe", "abundance", 2:6) %>% 
   left_join(gene_info, by = "probe") %>% 
-  ggplot(aes(x = abundance)) +
+  ggplot(aes(x = abundance, fill = symbol)) +
   geom_histogram(binwidth = 0.1) +
-  facet_wrap(~ symbol)
+  facet_wrap(~ symbol, nrow = 1) 
 pheno %>% 
   rownames_to_column("sample") %>% 
   gather("probe", "abundance", 2:6) %>% 
@@ -86,11 +96,7 @@ pheno %>%
   ggplot(aes(x = Population, y = abundance, fill = Population)) +
   geom_boxplot() +
   facet_wrap(~ symbol)
-table(covars$Population)
-table(covars$Sex)
-# does the coding of the genotypes makes sense across all the data?
-max(as.matrix(geno))
-min(as.matrix(geno))
+
 # are there any genotypes without associated phenotypes, or vice versa?
 all.equal(rownames(geno), rownames(pheno))
 pheno_pca <- prcomp(pheno)
@@ -98,20 +104,15 @@ pheno_pca_x <- as.data.frame(pheno_pca$x)
 pheno_pca_x %>% 
   rownames_to_column("sample") %>% 
   left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
-  ggplot(aes(x = PC2, y = PC3, color = Population)) +
+  ggplot(aes(x = PC1, y = PC2, color = Population)) +
   geom_point(size = 3, alpha = 0.5)
 ggpairs(pheno)
 ```
 
 Genotype plots:
 ```{r comment=NA}
-# calculate allele frequency
-geno_sums <- sapply(geno, function(x) sum(x) / (nrow(geno) * 2))
-# any genotypes need to be removed because of MAF < 5%?
-which(geno_sums < 0.05 | geno_sums > 0.95)
-# no genotypes need to be removed because of MAF < 5%
 # PCA analysis of genetic data
-geno_pca <- prcomp(geno)
+geno_pca <- prcomp(geno, center = TRUE, scale. = TRUE)
 plot((geno_pca$sdev^2/ sum(geno_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
 geno_pca_x <- data.frame(geno_pca$x)
 geno_pca_x %>% 
@@ -124,22 +125,23 @@ geno_pca_x %>%
   rownames_to_column("sample") %>% 
   left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Population")
+    geom_point(size = 2, alpha = 0.5) +
+    ggtitle("First two principal components, colored by Population") +
+  ylim(-70, 30)
+#indv_pca <- prcomp(t(geno), center = TRUE, scale. = TRUE)
+#indv_pca_x <- indv_pca$x
 ```
 
-There's clearly population structure.
+Based on on the principal component analysis of the genomes, colored by the population of origin, it is possible to see that there is clearly population structure. 
+
+Test each covariate individually. 
 
 ```{r comment=NA}
 x_a <- as.matrix(geno - 1)
 x_d <- replace(as.matrix(geno), which(as.matrix(geno) == 2 | as.matrix(geno) == 0), -1)
-MLE <- function(y_mat, xa, xd) {
+MLE <- function(xa, xd, y_mat) {
   X_mat <- cbind(1, xa, xd)
   beta_hat <- ginv(t(X_mat) %*% X_mat) %*% t(X_mat) %*% y_mat
-}
-MLE_result_col1 <- matrix(NA, nrow = 3, ncol = ncol(geno))
-for(i in 1:ncol(geno)){
-  MLE_result_col1[,i] <- MLE(as.numeric(as.matrix(pheno[, 2])), x_a[,i], x_d[,i])
 }
 fstat_calc <- function(y_mat, xa, xd, MLE) {
   X_mat <- cbind(1, xa, xd)
@@ -151,11 +153,22 @@ fstat_calc <- function(y_mat, xa, xd, MLE) {
   Fstat <- (SSM / df_M) / (SSE / df_E)
   return(Fstat)
 }
+
+
+# gene 1
+# check the degrees of freedom numbers
+MLE_result_col1 <- matrix(NA, nrow = 3, ncol = ncol(geno))
+for(i in 1:ncol(geno)){
+  MLE_result_col1[,i] <- MLE(x_a[,i], x_d[,i], as.numeric(as.matrix(pheno[, 1])))
+}
+
+test_gene1 <- map2(x_a, x_d, MLE, as.numeric(as.matrix(pheno[, 1])))
+
+
 fstat_result_col1 <- matrix(NA, nrow = 1, ncol = ncol(geno))
 for(i in 1:ncol(geno)) {
-  fstat_result_col1[i] <- fstat_calc(pheno[, 2], x_a[, i], x_d[, i], MLE_result_col1[, i])
+  fstat_result_col1[i] <- fstat_calc(pheno[, 1], x_a[, i], x_d[, i], MLE_result_col1[, i])
 }
-# check the degrees of freedom numbers
 pval_result_col1 <- pf(fstat_result_col1, 2, 344 - 3, lower.tail = FALSE)
 hist(pval_result_col1, breaks = 20, 
      xlab = "p-values", 
@@ -169,14 +182,55 @@ ggplot(man_plot_data_col1, aes(x = x, y = -log(pval, base = 10))) +
   xlab("Genotype Position") +
   ylab("-log10(pVal)")
 summary(which(pval_result_col1 < 0.05 / ncol(geno)))
-
-
 expected.pvals <- -log10(seq(from=0,to=1, length.out = length(man_plot_data_col1$pval)))
 observed.pvals <- -log10(man_plot_data_col1$pval)
 expected.sorted <- sort(expected.pvals)
 observed.sorted <- sort(observed.pvals)
+plot(expected.sorted, observed.sorted, main = "QQ plot for phenotype 1")
+abline(a = 0,b = 1, col = "red", lwd = 1)
+
+
+
+
+
+
+
+
+
+# gene 2
+MLE_result_col2 <- matrix(NA, nrow = 3, ncol = ncol(geno))
+for(i in 1:ncol(geno)){
+  MLE_result_col2[,i] <- MLE(as.numeric(as.matrix(pheno[, 2])), x_a[,i], x_d[,i])
+}
+fstat_result_col2 <- matrix(NA, nrow = 1, ncol = ncol(geno))
+for(i in 1:ncol(geno)) {
+  fstat_result_col2[i] <- fstat_calc(pheno[, 2], x_a[, i], x_d[, i], MLE_result_col2[, i])
+}
+pval_result_col2 <- pf(fstat_result_col2, 2, 344 - 3, lower.tail = FALSE)
+hist(pval_result_col2, breaks = 20, 
+     xlab = "p-values", 
+     ylab = "Number of p-values", 
+     main = "Distribution of p-values")
+man_plot_data_col2 <- as.data.frame(cbind(1:ncol(geno), t(pval_result_col2)))
+colnames(man_plot_data_col2) <- c("x", "pval")
+ggplot(man_plot_data_col2, aes(x = x, y = -log(pval, base = 10))) +
+  geom_point() +
+  ggtitle("Manhattan Plot, Gene 2") +
+  xlab("Genotype Position") +
+  ylab("-log10(pVal)")
+summary(which(pval_result_col2 < 0.05 / ncol(geno)))
+expected.pvals <- -log10(seq(from=0,to=1, length.out = length(man_plot_data_col2$pval)))
+observed.pvals <- -log10(man_plot_data_col2$pval)
+expected.sorted <- sort(expected.pvals)
+observed.sorted <- sort(observed.pvals)
 plot(expected.sorted, observed.sorted, main = "QQ plot for phenotype 2")
 abline(a = 0,b = 1, col = "red", lwd = 1)
+
+
+
+
+
+
 
 
 
