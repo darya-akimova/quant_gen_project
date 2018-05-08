@@ -9,7 +9,7 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-```{r packages, comment=NA, include=FALSE}
+```{r block1_packages, comment=NA, include=FALSE}
 library(dplyr)  # for data manipulation
 library(tidyr)  # for data manipulation
 library(tibble)  # for data manipulation
@@ -19,11 +19,12 @@ library(ggplot2)  # for plotting
 library(cowplot)  # for plotting, modifies ggplot2 defaults
 library(viridis)  # for color options
 library(GGally)  # for plotting many variables together
+library(HardyWeinberg)  # for Hardy-Weinberg equilibrium test
 library(MASS)  # for access to matrix functions
 ```
 
-```{r functions, include = FALSE}
-### Functions for linear regression and statistical test with no covariates ###
+```{r block2_functions, include = FALSE}
+##### Functions for linear regression and statistical test with no covariates #####
 MLE <- function(xa, xd, y_mat) {
   # calculates Beta_mu, Beta_a, and Beta_d - for linear regression, no covariates
   # required inputs: 1 column from x_a, 1 column from x_d, and 1 phenotype column
@@ -73,7 +74,7 @@ lin_reg_p_val <- function(xa, xd, gene) {
     pf(2, nrow(xa) - 3, lower.tail = FALSE)  # calculate the p-value   
   return(pval_gene)
 }
-
+##### Functions for linear regression and statistical test with covariates #####
 lin_reg_fstat_w_covar <- function(xa, xd, gene, x_c = NULL) {
   # Performs a linear regression and calculates a p-value for when covariates are included in the model
   # Required inputs: 1 column from x_a, 1 column from x_d, 1 pheonypte column
@@ -103,7 +104,7 @@ lin_reg_fstat_w_covar <- function(xa, xd, gene, x_c = NULL) {
 }
 ```
 
-```{r data_import, comment=NA, include=FALSE}
+```{r block3_data_import, comment=NA, include=FALSE}
 # read in data
 # geno = all provided genotype data
 geno <- read.csv("QG18_genotypes.csv", row.names = 1)
@@ -117,32 +118,31 @@ snp_info <- read.csv("QG18_SNP_info.csv", stringsAsFactors = FALSE)
 gene_info <- read.csv("QG18_gene_info.csv", stringsAsFactors = FALSE)
 ```
 
-All of the provided data files were imported successfully and the quality of the data was accessed as follows to ensure that 
+All of the provided data files were imported successfully and the quality of the data was accessed as follows to ensure that the data is in the expected format.
 
-```{r data_quality_checks, comment=NA}
-# is there any missing data?
+```{r block4_data_quality_checks, comment=NA}
+# Are there any missing entries in the data?
 anyNA(list(geno, pheno, covars, snp_info, gene_info))
-# are there approximately equal numbers of people in each covariate group?
+# Are there approximately equal numbers of people in each covariate group? Is the design balanced?
 table(covars$Population)
 table(covars$Sex)
-# does the coding of the genotypes makes sense across all the data?
+# Is the coding of the genotypes as expected across all of the data? Any unusual values?
 table(as.matrix(geno))
-# calculate allele frequency
+# Are there any genotypes with a minor allele frequency below 5% that need to be removed?
 geno_sums <- map_dbl(geno, function(x) sum(x) / (nrow(geno) * 2))
-# any genotypes need to be removed because of MAF < 5%?
+# Do any genotypes have a MAF < 5%
 any(geno_sums < 0.05 | geno_sums > 0.95)
-# no genotypes need to be removed because of MAF < 5%
-# are there any genotypes without associated phenotypes, or vice versa?
+# Are there any genotypes without associated phenotypes, or vice versa?
 all.equal(rownames(geno), rownames(pheno))
 ```
 
+Overall, there were no missing values across all of the data and information provided. There are approximately equal numbers of males and females in the study, and approximately equal numbers of individuals in each of the population groups. Most importantly, none of the covariate groups had a small n. The genotype data were coded as expected, with no unusual values. No genotypes had a minor allele frequency below 5%, which indicates that no SNPs need to be removed from analysis based on that criteria. Lastly, all of the individuals in the genotype dataset are found in the phenotype dataset and no samples need to be filtered out on that criteria. 
 
-```{r data_prep, comment=NA, echo=FALSE, fig.height=4, fig.width=8}
+
+The phenotype data was visualized and a PCA analysis was performed on the phenotype data in order to determine if there are any outliers in the phenotype data or unusual structure.
+
+```{r block5_pheno_pca_and_plots, echo=FALSE, comment=NA, fig.height=4, fig.width=8}
 ### prep of data for analysis ###
-# x_a matrix creation
-x_a <- as.matrix(geno - 1)
-# x_d matrix creation
-x_d <- replace(as.matrix(geno), which(as.matrix(geno) == 2 | as.matrix(geno) == 0), -1)
 # change the phenotype names from probe to gene for easier interpretation and code readability
 pheno_names <- pheno %>%
   rownames_to_column("sample") %>%  # preserve sample info through manipulation
@@ -161,72 +161,225 @@ pheno_names %>%
   ggplot(aes(x = abundance, fill = gene)) +
   geom_histogram(binwidth = 0.1) +
   facet_wrap(~ gene, nrow = 1) 
-```
-
-A PCA analysis was performed on the phenotype data 
-
-```{r pheno_pca, echo=FALSE, comment=NA}
 pheno_pca <- prcomp(pheno_names)
 plot((pheno_pca$sdev^2/ sum(pheno_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
 pheno_pca_x <- as.data.frame(pheno_pca$x)
 pheno_pca_x %>% 
   rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
+  left_join(
+    covars %>% 
+      rownames_to_column("sample"), 
+    by = "sample"
+    ) %>% 
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
-  geom_point(size = 2, alpha = 0.8)
+  geom_point(size = 2, alpha = 0.8) +
+  ggtitle("Principal Component Analysis of Phenotype Data\nColored by the Population Covariate") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2")
 ggpairs(pheno_names)
+ggpairs(
+  pheno_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Sex)
+  )
+ggpairs(
+  pheno_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Population)
+  )
 ```
 
-Genotype plots:
-```{r geno_pca, comment=NA, echo=FALSE}
-# PCA analysis of genetic data
-geno_pca <- prcomp(geno, center = TRUE, scale. = TRUE)
-plot((geno_pca$sdev^2/ sum(geno_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
-geno_pca_x <- data.frame(geno_pca$x)
-geno_pca_x %>% 
+The abundances of each gene were found to be normally distributed and the PCA analysis did not reveal any unusual patterns. Further more, none of the phenotype genes were found to be correlated with each other to a meaningful degree and, therefore, each one can be analyzed in a one by one pairing with each genotype.
+
+Each SNP position was tested for Hardy-Weinberg Equilibrium using the exact test published by [Wigginton *et al* (2005)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1199378/). This is the same test that is performed by default by the Genome Association Analysis software PLINK. In this analysis, it was used as implemented in the HardyWeinberg R package: [HardyWeinberg Package on CRAN](https://cran.r-project.org/package=HardyWeinberg). This test determines if the proportion of alleles at a particular genotype position is as expected. A statistically significant result can indicate a problem with the sequencing process or a population structure, both of which can result in misleading GWAS results.
+
+```{r block6_HW_exact_test_at_each_snp, comment=NA, echo=FALSE}
+# implements the test for Hardy-Weinberg equilibrium at each SNP 
+# the HWExact function requires a count of AA, AB, and BB as input
+# each column of geno is converted to a factor with 3 levels for cases where no 0, 1, or 2 were measured at the SNP position
+geno_exact_HW_test <- map(
+  geno,  # map function over each column of geno data frame
+  function(x) HWExact(table(factor(x, levels = c(0, 1, 2))), verbose = FALSE)
+  )
+# invert the list for easier access to p-values
+geno_exact_HW_test_t <- purrr::transpose(geno_exact_HW_test)
+# convert list of p-values for each SNP to a data frame that is easier to work with
+geno_exact_HW_pval <- data.frame(unlist(geno_exact_HW_test_t$pval))
+colnames(geno_exact_HW_pval) <- "pvalue"
+geno_exact_HW_pval$position <- 1:nrow(geno_exact_HW_pval)
+geno_exact_HW_pval %>% 
+  ggplot(aes(x = pvalue)) +
+  geom_histogram(bins = 50) +
+  xlab("P-value") +
+  ylab("Count") +
+  ggtitle("Histogram of Hardy-Weinberg p-values\nOne test per each genotype position in the original data")
+geno_exact_HW_pval %>% 
+  ggplot(aes(x = position, y = -log(pvalue, base = 10))) +
+  geom_point(size = 1, alpha = 0.5) +
+  geom_hline(yintercept = -log(0.05, base = 10), color = "red", size = 1, alpha = 0.8) +
+  geom_hline(yintercept = -log(0.05 / ncol(geno), base = 10), color = "blue", size = 1, alpha = 0.8) +
+  ylab("-log(P-Value)") +
+  xlab("Position") +
+  ggtitle("Manhattan Plot of Hardy-Weinberg Equilibrium Exact Test Results\nRed Line = -log(P-value = 0.05)\nBlue Line = Bonferroni Cut-off of -log(P-value = 0.05 / 50,000)")
+length(which(geno_exact_HW_pval < 0.05 / ncol(geno)))
+length(which(geno_exact_HW_pval < 0.05))
+```
+
+To be conservative, all genotypes that were found to fail the Hardy-Equilibrium exact test with a p-value < 0.05 were removed from consideration. 
+
+```{r block7_geno_filtered_on_HW_genes_plots_and_pca, comment=NA, echo=FALSE}
+# filter out genotypes that failed the HW equilibrium test:
+geno_HW_filt <- geno[, which(geno_exact_HW_pval$pvalue >= 0.05)]
+### PCA - full filtered genomics dataset
+geno_HW_filt_pca <- prcomp(geno_HW_filt, center = TRUE, scale. = TRUE)
+# plot variance explained by each principal component
+plot(
+  (geno_HW_filt_pca$sdev ^ 2/ sum(geno_HW_filt_pca$sdev ^ 2)) * 100, 
+  xlab = "Principal Component", 
+  ylab = "Percent of total variance explained",
+  main = "Percent of total variance explained by each principal component")
+geno_HW_filt_pca_x <- data.frame(geno_HW_filt_pca$x)
+geno_HW_filt_pca_x %>% 
   rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
+  # join onto covariates data frame for covariate info for each sample
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample"
+    ) %>% 
   ggplot(aes(x = PC1, y = PC2, color = Sex)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Sex")
-geno_pca_x %>% 
+  geom_point(size = 2, alpha = 0.8) +
+  ggtitle("Principal Component Analsysis\nColored by Sex Covariate") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2")
+geno_HW_filt_pca_x %>% 
   rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
+  # join onto covariates data frame for covariate info for each sample
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample"
+    ) %>% 
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
-    geom_point(size = 2, alpha = 0.5) +
-    ggtitle("First two principal components, colored by Population") #+
- # ylim(-70, 30)
-indv_pca <- prcomp(t(geno), center = TRUE, scale. = TRUE)
-indv_pca_x <- as.data.frame(indv_pca$rotation) %>% 
+  geom_point(size = 2, alpha = 0.8) +
+  ggtitle("Principal Component Analsysis\nColored by Population Covariate") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2")
+
+### alternative PCA method - PCA on individuals, but then take rotation ###
+indv_HW_filt_pca <- prcomp(t(geno_HW_filt), center = TRUE, scale. = TRUE)
+indv_HW_filt_pca_x <- as.data.frame(indv_HW_filt_pca$rotation) %>% 
   rownames_to_column("sample") %>% 
   left_join(covars %>% rownames_to_column("sample"), by = "sample")
-indv_pca_x %>% 
+indv_HW_filt_pca_x %>% 
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
-  geom_point(size = 2, alpha = 0.5)
-# filtered PCA
-test <- seq.int(from = 1, to = ncol(geno), by = 10)
-geno_filt_pca <- prcomp(geno[, test], center = TRUE, scale. = TRUE)
-plot((geno_filt_pca$sdev^2/ sum(geno_filt_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
-geno_filt_pca_x <- data.frame(geno_filt_pca$x)
-geno_filt_pca_x %>% 
+  geom_point(size = 2, alpha = 0.8)
+
+### HW filtered genotype data, followed by taking every 10th genotype ###
+geno_HW_filt_every10_pca <- prcomp(
+  geno_HW_filt[, seq.int(from = 1, to = ncol(geno_HW_filt), by = 10)], 
+  center = TRUE, scale. = TRUE
+  )
+# plot variance explained by each component
+plot(
+  (geno_HW_filt_every10_pca$sdev ^ 2/ sum(geno_HW_filt_every10_pca$sdev ^ 2)) * 100, 
+  xlab = "Principal Component", 
+  ylab = "Percent of total variance explained",
+  main = "Percent of total variance explained by each principal component\nEvery 10th Genotype")
+geno_HW_filt_every10_pca_x <- data.frame(geno_HW_filt_every10_pca$x)
+geno_HW_filt_every10_pca_x %>% 
   rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
+  left_join(
+    covars %>% 
+      rownames_to_column("sample"), 
+    by = "sample"
+    ) %>% 
   ggplot(aes(x = PC1, y = PC2, color = Sex)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Sex")
-geno_filt_pca_x %>% 
+  geom_point(size = 2, alpha = 0.8) +
+  ggtitle("Principal Component Analsysis\nColored by Sex Covariate") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2")
+geno_HW_filt_every10_pca_x %>% 
   rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
+  left_join(
+    covars %>% 
+      rownames_to_column("sample"), 
+    by = "sample"
+    ) %>% 
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Population")
+  geom_point(size = 2, alpha = 0.8)+
+  ggtitle("Principal Component Analsysis\nColored by Population Covariate") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2")
+ggpairs(
+  geno_HW_filt_every10_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Population)
+  )
+ggpairs(
+  geno_HW_filt_every10_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Sex)
+  )
+ggpairs(
+  geno_HW_filt_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Population)
+  )
+ggpairs(
+  geno_HW_filt_pca_x %>% 
+    rownames_to_column("sample") %>% 
+    left_join(
+      covars %>% 
+        rownames_to_column("sample"), 
+      by = "sample"
+      ),
+  columns = 2:6,
+  ggplot2::aes(colour = Sex)
+  )
 ```
 
-Based on on the principal component analysis of the genomes, colored by the population of origin, it is possible to see that there is clearly population structure. 
+Based on on the principal component analysis of the genomes, colored by the population of origin, it is possible to see that there is clearly population structure. Interestingly, the principal component analysis suggests that the Sex covariate does not seem to play a significant role in the genotype structure. This makes sense since the genotype data does not include the sex chromosomes. The first principal component seems to carry most of the population-related variance, regardless of how the principal components are calculated. 
 
-Test each covariate individually. 
+The first type of analysis that was conducted did not consider any covariates, either provided or derived from the PCA analysis. The genotype data that was used, was the set filtered on the Hardy-Weinberg Equilibrium test significant genes. 
 
-```{r pheno_geno_simpl_lin_reg, comment=NA, echo=FALSE}
+```{r block8_gwas_simpl_lin_reg_no_covar, comment=NA, echo=FALSE}
+# x_a matrix creation
+x_a <- as.matrix(geno_HW_filt - 1)
+# x_d matrix creation
+x_d <- replace(
+  as.matrix(geno_HW_filt), 
+  which(as.matrix(geno_HW_filt) == 2 | as.matrix(geno_HW_filt) == 0), 
+  -1
+  )
 ### linear reg - F-stat based test and p-value calculation ###
 # ERAP2
 pval_ERAP2 <- lin_reg_p_val(x_a, x_d, pheno_names$ERAP2)
@@ -241,7 +394,7 @@ pval_PEX6 <- lin_reg_p_val(x_a, x_d, pheno_names$PEX6)
 # combined data frame 
 pval_no_covar <- as.data.frame(
   cbind(
-    x = 1:ncol(geno), 
+    x = 1:ncol(geno_HW_filt), 
     ERAP2 = pval_ERAP2,
     FAHD1 = pval_FAHD1,
     GFM1 = pval_GFM1,
@@ -249,27 +402,100 @@ pval_no_covar <- as.data.frame(
     PEX6 = pval_PEX6
     )
   )
-row.names(pval_no_covar) <- colnames(geno)
+row.names(pval_no_covar) <- colnames(geno_HW_filt)
+### p-value distribution ###
 pval_no_covar %>% 
   gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = pval, color = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 20)
+  ggplot(aes(x = pval, color = gene, fill = gene)) +
+  geom_histogram(position = "identity", bins = 50) +
+  facet_wrap(~ gene) +
+  xlab("p-value") +
+  ylab("Count") +
+  ggtitle("Histogram of p-values\nLinear Regression, no covariates\nAll Genes")
+### Manhattan plot ###
 pval_no_covar %>% 
   gather("gene", "pval", 2:6) %>% 
   ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
   geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll Genes") +
+  ggtitle("Manhattan Plot\nSimple Linear Regression, no covariates\nAll Genes") +
   xlab("Genotype Position") +
-  ylab("-log10(pVal)") +
+  ylab("-log10(pValue)") +
+  geom_hline(yintercept = -log(0.05 / ncol(geno_HW_filt), base = 10), size = 1, alpha = 0.8) +
   ylim(0, 100)
-# number of statistically significant positions after Bonferroni correction
+
+### number of statistically significant positions after Bonferroni correction ###
 pval_no_covar %>% 
   rownames_to_column("snp") %>% 
   dplyr::select(-x) %>% 
   gather("gene", "pval", 2:6) %>% 
-  filter(pval < (0.5 / ncol(geno))) %>% 
+  filter(pval < (0.05 / ncol(geno_HW_filt))) %>% 
   group_by(gene) %>% 
   count()
+
+### ERAP2 hits SNP names and locations ###
+no_covar_ERAP2_hits <- as.data.frame(
+  row.names(pval_no_covar)[which(pval_no_covar$ERAP2 < 0.05 / ncol(geno_HW_filt))],
+  stringsAsFactors = FALSE
+  )
+colnames(no_covar_ERAP2_hits) <- "id"
+# join to SNP info dataset in order to get chromosome and position info
+no_covar_ERAP2_hits <- no_covar_ERAP2_hits %>%
+  left_join(snp_info, by = "id") %>% 
+  arrange(chromosome, position) %>% 
+  # is the SNP within the gene itself? Numbers from gene info file
+  mutate(
+    in_gene = position >= gene_info[which(gene_info$symbol == "ERAP2"), "start"] & position <= gene_info[which(gene_info$symbol == "ERAP2"), "end"]& chromosome == gene_info[which(gene_info$symbol == "ERAP2"), "chromosome"]
+    )
+# what percent of significant SNPs are within the gene coding region?
+sum(no_covar_ERAP2_hits$in_gene) / nrow(no_covar_ERAP2_hits) * 100
+# which chromosomes are the SNP hits located on?
+unique(no_covar_ERAP2_hits$chromosome)
+# what is the range of positions? 
+summary(no_covar_ERAP2_hits$position)
+
+### FAHD1 hits SNP names and locations #
+no_covar_FAHD1_hits <- as.data.frame(
+  row.names(pval_no_covar)[which(pval_no_covar$FAHD1 < 0.05 / ncol(geno_HW_filt))],
+  stringsAsFactors = FALSE
+  )
+colnames(no_covar_FAHD1_hits) <- "id"
+# join to SNP info dataset in order to get chromosome and position info
+no_covar_FAHD1_hits <- no_covar_FAHD1_hits %>%
+  left_join(snp_info, by = "id") %>% 
+  arrange(chromosome, position) %>% 
+  # is the SNP within the gene itself? Numbers from gene info file
+  mutate(
+    in_gene = position >= gene_info[which(gene_info$symbol == "FAHD1"), "start"] & position <= gene_info[which(gene_info$symbol == "FAHD1"), "end"] & chromosome == gene_info[which(gene_info$symbol == "FAHD1"), "chromosome"]
+    )
+# what percent of significant SNPs are within the gene coding region?
+sum(no_covar_FAHD1_hits$in_gene) / nrow(no_covar_FAHD1_hits) * 100
+# which chromosomes are the SNP hits located on?
+unique(no_covar_FAHD1_hits$chromosome)
+# what is the range of positions? 
+summary(no_covar_FAHD1_hits$position)
+
+### PEX6 hits SNP names and locations ###
+no_covar_PEX6_hits <- as.data.frame(
+  row.names(pval_no_covar)[which(pval_no_covar$PEX6 < 0.05 / ncol(geno_HW_filt))],
+  stringsAsFactors = FALSE
+  )
+colnames(no_covar_PEX6_hits) <- "id"
+# join to SNP info dataset in order to get chromosome and position info
+no_covar_PEX6_hits <- no_covar_PEX6_hits %>%
+  left_join(snp_info, by = "id") %>% 
+  arrange(chromosome, position) %>% 
+  # is the SNP within the gene itself? Numbers from gene info file
+  mutate(
+    in_gene = position >= gene_info[which(gene_info$symbol == "PEX6"), "start"] & position <= gene_info[which(gene_info$symbol == "PEX6"), "end"] & chromosome == gene_info[which(gene_info$symbol == "PEX6"), "chromosome"]
+    )
+# what percent of significant SNPs are within the gene coding region?
+sum(no_covar_PEX6_hits$in_gene) / nrow(no_covar_PEX6_hits) * 100
+# which chromosomes are the SNP hits located on?
+unique(no_covar_PEX6_hits$chromosome)
+# what is the range of positions? 
+summary(no_covar_PEX6_hits$position[which(no_covar_PEX6_hits$chromosome == 6)])
+
+### QQ Plot to assess data quality ###
 pval_no_covar_qqplot <- data.frame(
   cbind(
     expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_no_covar$x)))),
@@ -283,20 +509,21 @@ pval_no_covar_qqplot <- data.frame(
 pval_no_covar_qqplot %>% 
   gather("gene", "neglog10_pval", 2:6) %>% 
   ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
+  geom_point(alpha = 0.8, size = 2) +
   geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
   xlab("Expected -log(pValue)") +
   ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes") +
+  ggtitle("QQ Plot\nSimple Linear Regression, no Covariates\nAll Genes") +
   ylim(0, 100)
 ```
 
-Seems like there is a problem with just the base model. Based of the PCA analysis, it appears that the Population may be an important covariate to include in the models.
+A number of SNPs were found to be associated with the expression levels of ERAP2, FAHD1, and PEX6. No SNPs were found to be associated with the expression of the GFM1 and MARCH 7 genes. Based of the PCA analysis, it appears that the Population may be an important covariate to include in the models.
 
 But first, let's test the relationship of each phenotype with each covariate:
 
-```{r pheno_covars_sig_tests, echo=FALSE}
-nested_pheno <- pheno_names %>% 
+```{r block9_pheno_covars_sig_tests, echo=FALSE, comment=NA}
+## create a nested data frame for modeling
+nested_pheno_w_given_covars <- pheno_names %>% 
   rownames_to_column("samples") %>% 
   left_join(
     covars %>% 
@@ -305,59 +532,120 @@ nested_pheno <- pheno_names %>%
   ) %>% 
   gather("gene", "abundance", 2:6) %>% 
   nest(-gene)
-num_factor_pop_lm <- nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ as.numeric(factor(Population)), data = .))) %>% 
+
+## Do any of the phenotypes have a statistically significant relationship with the Population covariate 
+# if it is coded with 4 levels: 1, 2, 3, 4 
+num_factor_pop_lm <- nested_pheno_w_given_covars %>% 
+  # model each phenotype as a function of numerically coded Population
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ as.numeric(factor(Population)), data = .)
+      )
+    ) %>% 
+  # broom package used to simplify the structure of the lm function result
   mutate(glance_model = map(model, glance)) %>% 
+  # unnest the above result
   unnest(glance_model) %>% 
+  # select only the gene and the p-value for the significance of phenotype ~ covariate
   dplyr::select(gene, p.value)
 num_factor_pop_lm[which(num_factor_pop_lm$p.value < 0.05), ]
-# what if Population was treated as a factor and R was allowed to code it
-cat_factor_pop_lm <- nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ factor(Population), data = .))) %>% 
+# ERAP2 only
+
+## What if Population was treated as a factor and R was allowed to code it
+cat_factor_pop_lm <- nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
 cat_factor_pop_lm[which(cat_factor_pop_lm$p.value < 0.05), ]
-# what about the Sex covariable?
-covar_sex_lm <- nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ factor(Sex), data = .))) %>% 
+# ERAP2 only again
+
+## Even though the PCA suggested that Sex does not contribute to structure in the data,
+# Do any of the phenotypes have a statistically significant relationship with the Sex covarite?
+covar_sex_lm <- nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Sex), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
 any(covar_sex_lm < 0.05)
 # none are significant on the sex covariable
-# what about a combination? 
-covars_sex_num_pop_lm <- nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ as.numeric(factor(Population)) + factor(Sex), data = .))) %>% 
+
+## What about a combination of the two covariates? 
+covars_sex_num_pop_lm <- nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ as.numeric(factor(Population)) + factor(Sex), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
 covars_sex_num_pop_lm[which(covars_sex_num_pop_lm$p.value < 0.05), ]
-nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ as.numeric(factor(Population)) + factor(Sex), data = .))) %>% 
+# Only ERAP2 statistically significant again 
+# If the result is cleaned using a different broom function,
+# the estimates and associated p-values of each factor can be extracted
+nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ as.numeric(factor(Population)) + factor(Sex), data = .)
+      )
+    ) %>% 
   mutate(tidy_model = map(model, tidy)) %>% 
   unnest(tidy_model) %>% 
   filter(gene %in% covars_sex_num_pop_lm[which(covars_sex_num_pop_lm$p.value < 0.05), 1])
-# indicates that the relationship between population only is significant
-covars_sex_cat_pop_lm <- nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ factor(Population) + factor(Sex), data = .))) %>% 
+# Indicates that the relationship between population only is significant,
+# even if both Population and Sex covariates are included in the model
+
+## What is the result if R is allowed to code Population? 
+covars_sex_cat_pop_lm <- nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population) + factor(Sex), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
 covars_sex_cat_pop_lm[which(covars_sex_cat_pop_lm$p.value < 0.05), ]
-nested_pheno %>% 
-  mutate(model = map(data, ~lm(abundance ~ factor(Population) + factor(Sex), data = .))) %>% 
+# ERAP2 only again
+nested_pheno_w_given_covars %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population) + factor(Sex), data = .)
+      )
+    ) %>% 
   mutate(tidy_model = map(model, tidy)) %>% 
   unnest(tidy_model) %>% 
   filter(gene %in% covars_sex_num_pop_lm[which(covars_sex_num_pop_lm$p.value < 0.05), 1])
+# Only significant on the TSI coding factor
+# Again, Sex covariate does not seem important
+
+##### Alternative Population coding of given covariate data #####
 # PCA analysis suggested that the CEU population is very similar to GBR, what if its coded that way?
 covars_mod <- covars 
+# replace both "GBR" and "CEU" with "WEU" for generally western/northern european ancestry
 covars_mod$Population <- replace(
   covars_mod$Population, 
   which(covars$Population == "GBR" | covars$Population == "CEU"), 
   "WEU"
   )
-covars_num_pop_gbr_ceu_lm <- pheno_names %>% 
+# new nested data frame with modified population coding
+nested_pheno_w_covars_mod <- pheno_names %>% 
   rownames_to_column("samples") %>% 
   left_join(
     covars_mod %>% 
@@ -365,31 +653,62 @@ covars_num_pop_gbr_ceu_lm <- pheno_names %>%
     by = "samples"
   ) %>% 
   gather("gene", "abundance", 2:6) %>% 
-  nest(-gene) %>% 
-  mutate(model = map(data, ~lm(abundance ~ as.numeric(factor(Population)), data = .))) %>% 
+  nest(-gene)
+# Do any of the phenotypes have a statistically significant relationship with the Population now?
+covars_num_pop_weu_lm <- nested_pheno_w_covars_mod %>% 
+  mutate(
+    model = map(
+      data, ~lm(abundance ~ as.numeric(factor(Population)), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
-any(covars_num_pop_gbr_ceu_lm$p.value < 0.05)
-covars_cat_pop_gbr_ceu_lm <- pheno_names %>% 
-  rownames_to_column("samples") %>% 
-  left_join(
-    covars_mod %>% 
-      rownames_to_column("samples"),
-    by = "samples"
-  ) %>% 
-  gather("gene", "abundance", 2:6) %>% 
-  nest(-gene) %>% 
-  mutate(model = map(data, ~lm(abundance ~ factor(Population), data = .))) %>% 
+any(covars_num_pop_weu_lm$p.value < 0.05)
+# None of the phenotypes have a statistically significant relationship with phenotype with the new coding
+
+# What about if R was allowed to code the Population? 
+covars_cat_pop_weu_lm <- nested_pheno_w_covars_mod %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population), data = .)
+      )
+    ) %>% 
   mutate(glance_model = map(model, glance)) %>% 
   unnest(glance_model) %>% 
   dplyr::select(gene, p.value)
-covars_cat_pop_gbr_ceu_lm[which(covars_cat_pop_gbr_ceu_lm$p.value < 0.05), ]
+covars_cat_pop_weu_lm[which(covars_cat_pop_weu_lm$p.value < 0.05), ]
+# only ERAP2 is statistically significant again 
+
+# What if the Sex covaraite is included in this model? 
+covars_sex_cat_pop_weu_lm <- nested_pheno_w_covars_mod %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population) + factor(Sex), data = .)
+      )
+    ) %>% 
+  mutate(glance_model = map(model, glance)) %>% 
+  unnest(glance_model) %>% 
+  dplyr::select(gene, p.value)
+covars_sex_cat_pop_weu_lm[which(covars_sex_cat_pop_weu_lm$p.value < 0.05), ]
+# Only ERAP2 again
+nested_pheno_w_covars_mod %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ factor(Population) + factor(Sex), data = .)
+      )
+    ) %>% 
+  mutate(tidy_model = map(model, tidy)) %>% 
+  unnest(tidy_model) %>% 
+  filter(gene %in% covars_sex_cat_pop_weu_lm[which(covars_sex_cat_pop_weu_lm$p.value < 0.05), 1])
 ```
 
-Including Population as covariate:
+Including Population as given as a covariate:
 
-```{r gwas_with_given_pop_covar, comment=NA, echo=FALSE}
+```{r block10_gwas_with_given_pop_covar, comment=NA, echo=FALSE}
 pheno_with_covars <- pheno_names %>% 
   rownames_to_column("samples") %>% 
   left_join(
@@ -397,45 +716,46 @@ pheno_with_covars <- pheno_names %>%
       rownames_to_column("samples"), 
     by = "samples")
 x_c_pop <- as.numeric(factor(pheno_with_covars$Population))
-
+### ERAP2 ###
 pval_ERAP2_w_pop_num_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
   pheno_names$ERAP2, x_c_pop
   ) %>% 
   flatten_dbl()
-#pval_ERAP2_test <- map2(data.frame(x_a), data.frame(x_d), lin_reg_fstat_w_covar, pheno_names$ERAP2, NULL) %>% 
-#    flatten_dbl()
-summary(which(pval_ERAP2_w_pop_num_covar < 0.05 / ncol(geno)))
-summary(which(pval_ERAP2 < 0.05 / ncol(geno)))
-
+### FAHD1 ###
 pval_FAHD1_w_pop_num_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
   pheno_names$FAHD1, x_c_pop
   ) %>% 
   flatten_dbl()
+### GFM1 ###
 pval_GFM1_w_pop_num_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
   pheno_names$GFM1, x_c_pop
   ) %>% 
   flatten_dbl()
+### MARCH7 ###
 pval_MARCH7_w_pop_num_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
   pheno_names$MARCH7, x_c_pop
   ) %>% 
   flatten_dbl()
+### PEX6 ###
 pval_PEX6_w_pop_num_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
   pheno_names$PEX6, x_c_pop
   ) %>% 
   flatten_dbl()
+
+# combined data frame 
 pval_num_pop_covar <- as.data.frame(
   cbind(
-    x = 1:ncol(geno), 
+    x = 1:ncol(geno_HW_filt), 
     ERAP2 = pval_ERAP2_w_pop_num_covar,
     FAHD1 = pval_FAHD1_w_pop_num_covar,
     GFM1 = pval_GFM1_w_pop_num_covar,
@@ -443,19 +763,75 @@ pval_num_pop_covar <- as.data.frame(
     PEX6 = pval_PEX6_w_pop_num_covar
     )
   )
-row.names(pval_num_pop_covar) <- colnames(geno)
+row.names(pval_num_pop_covar) <- colnames(geno_HW_filt)
+### p-value distribution ###
 pval_num_pop_covar %>% 
   gather("gene", "pval", 2:6) %>% 
   ggplot(aes(x = pval, fill = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 20)
+  geom_histogram(position = "identity", bins = 50) +
+  facet_wrap(~ gene) +
+  xlab("p-value") +
+  ylab("Count") +
+  ggtitle("Histogram of p-values\nLinear Regression, Population included as covariate\nAll Genes")
+
+### Manhattan plot ###
 pval_num_pop_covar %>% 
   gather("gene", "pval", 2:6) %>% 
   ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
   geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll genes after Including Population as Covar") +
+  ggtitle("Manhattan Plot\nLinear Regression, Population included as covariate\nAll Genes") +
   xlab("Genotype Position") +
-  ylab("-log10(pVal)") +
-  ylim(0, 100)
+  ylab("-log10(pValue)") +
+  ylim(0, 100) +
+  geom_hline(yintercept = -log(0.05 / ncol(geno_HW_filt), base = 10), size = 1, alpha = 0.8)
+
+### number of statistically significant positions after Bonferroni correction ###
+pval_num_pop_covar %>% 
+  rownames_to_column("snp") %>% 
+  dplyr::select(-x) %>% 
+  gather("gene", "pval", 2:6) %>% 
+  filter(pval < 0.05 / ncol(geno_HW_filt)) %>% 
+  group_by(gene) %>% 
+  count()
+
+### Comparison of hits: no covariates vs population as given covariate ###
+# How do the ERAP2 hits compare when Population is included vs not included in the model? 
+summary(which(pval_ERAP2_w_pop_num_covar < 0.05 / ncol(geno_HW_filt)))
+summary(which(pval_ERAP2 < 0.05 / ncol(geno_HW_filt)))
+# Are the hits the same as the analysis where Population is not included as a covariate?
+all.equal(
+  which(pval_ERAP2_w_pop_num_covar < 0.05 / ncol(geno_HW_filt)), 
+  which(pval_ERAP2 < 0.05 / ncol(geno_HW_filt))
+  )
+# The hits are the same for ERAP2 between the two methods
+
+# How do the FADH1 hits compare when Population is included vs not included in the model? 
+all.equal(
+  which(pval_FAHD1_w_pop_num_covar < 0.05 / ncol(geno_HW_filt)), 
+  which(pval_FAHD1 < 0.05 / ncol(geno_HW_filt))
+  )
+# The FADH1 hits are also the same between the two methods
+
+# There is 1 fewer PEX6 hit when Population is included in the model
+num_pop_covar_PEX6_hits <- as.data.frame(
+  row.names(pval_num_pop_covar)[which(pval_num_pop_covar$PEX6 < 0.05 / ncol(geno_HW_filt))],
+  stringsAsFactors = FALSE
+  )
+colnames(num_pop_covar_PEX6_hits) <- "id"
+# join to SNP info dataset in order to get chromosome and position info
+num_pop_covar_PEX6_hits <- num_pop_covar_PEX6_hits %>%
+  left_join(snp_info, by = "id") %>% 
+  arrange(chromosome, position) %>% 
+  mutate(
+    in_gene = position >= gene_info[which(gene_info$symbol == "PEX6"), "start"] & position <= gene_info[which(gene_info$symbol == "PEX6"), "end"] & chromosome == gene_info[which(gene_info$symbol == "PEX6"), "chromosome"]
+    )
+# which chromosomes are the SNP hits located on?
+unique(num_pop_covar_PEX6_hits$chromosome)
+# the hit on chromosome 4 is still there
+# which snp from the previous analysis is no longer a hit?
+no_covar_PEX6_hits[which(!(no_covar_PEX6_hits$id %in% num_pop_covar_PEX6_hits$id)), ]
+
+### QQ Plot to assess data quality ###
 pval_num_pop_covar_qqplot <- data.frame(
   cbind(
     expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_num_pop_covar$x)))),
@@ -469,19 +845,402 @@ pval_num_pop_covar_qqplot <- data.frame(
 pval_num_pop_covar_qqplot %>% 
   gather("gene", "neglog10_pval", 2:6) %>% 
   ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
+  geom_point(alpha = 0.8, size = 2) +
   geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
   xlab("Expected -log(pValue)") +
   ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes") +
+  ggtitle("QQ Plot\nLinear Regression, Population included as covariate\nAll Genes") +
   ylim(0, 100)
 ```
 
+Try PC1 as a covariate: 
 
-Including Population and Sex as Covariates:
+```{r block11_gwas_with_full_geno_PC1, comment=NA, echo=FALSE}
+# join the phenotype data onto the full genotype (after HW filtering) PC components
+pheno_with_geno_pca_x <- pheno_names %>% 
+  rownames_to_column("samples") %>% 
+  left_join(
+    geno_HW_filt_every10_pca_x %>% 
+      rownames_to_column("samples"), 
+    by = "samples")
+# new covariate vector 
+x_c_PC1 <- pheno_with_geno_pca_x$PC2
+### Analysis with new covariate ###
+### ERAP2 ###
+pval_ERAP2_w_PC1_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$ERAP2, x_c_PC1
+  ) %>% 
+  flatten_dbl()
+summary(which(pval_ERAP2_w_PC1_covar < 0.05 / ncol(geno_HW_filt)))
+summary(which(pval_ERAP2 < 0.05 / ncol(geno_HW_filt)))
+### FAHD1 ###
+pval_FAHD1_w_PC1_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$FAHD1, x_c_PC1
+  ) %>% 
+  flatten_dbl()
+### GFM1 ###
+pval_GFM1_w_PC1_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$GFM1, x_c_PC1
+  ) %>% 
+  flatten_dbl()
+### MARCH7 ###
+pval_MARCH7_w_PC1_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$MARCH7, x_c_PC1
+  ) %>% 
+  flatten_dbl()
+### PEX6 ###
+pval_PEX6_w_PC1_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$PEX6, x_c_PC1
+  ) %>% 
+  flatten_dbl()
 
-```{r gwas_with_given_pop_sex_covars, comment=NA, echo=FALSE}
-x_c_pop_and_sex <- cbind(as.numeric(factor(pheno_with_covars$Population)), as.numeric(factor(pheno_with_covars$Sex)))
+# combined data frame 
+pval_PC1_covar <- as.data.frame(
+  cbind(
+    x = 1:ncol(geno_HW_filt), 
+    ERAP2 = pval_ERAP2_w_PC1_covar,
+    FAHD1 = pval_FAHD1_w_PC1_covar,
+    GFM1 = pval_GFM1_w_PC1_covar,
+    MARCH7 = pval_MARCH7_w_PC1_covar,
+    PEX6 = pval_PEX6_w_PC1_covar
+    )
+  )
+row.names(pval_PC1_covar) <- colnames(geno_HW_filt)
+
+### p-value distribution ###
+pval_PC1_covar %>% 
+  gather("gene", "pval", 2:6) %>% 
+  ggplot(aes(x = pval, fill = gene)) +
+  geom_histogram(position = "identity", bins = 50) +
+  facet_wrap(~ gene) +
+  xlab("p-value") +
+  ylab("Count") +
+  ggtitle("Histogram of p-values\nLinear Regression, PC1 from full genotype PCA included as covariate\nAll Genes")
+
+### Manhattan plot ###
+pval_PC1_covar %>% 
+  gather("gene", "pval", 2:6) %>% 
+  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
+  geom_point(alpha = 0.8, size = 2) +
+  ggtitle("Manhattan Plot\nLinear Regression, PC1 from full genotype PCA included as covariate\nAll Genes") +
+  xlab("Genotype Position") +
+  ylab("-log10(pValue)") +
+  ylim(0, 100) +
+  geom_hline(yintercept = -log(0.05 / ncol(geno_HW_filt), base = 10), size = 1, alpha = 0.8)
+
+### number of statistically significant positions after Bonferroni correction ###
+pval_PC1_covar %>% 
+  rownames_to_column("snp") %>% 
+  dplyr::select(-x) %>% 
+  gather("gene", "pval", 2:6) %>% 
+  filter(pval < 0.05 / ncol(geno_HW_filt)) %>% 
+  group_by(gene) %>% 
+  count()
+
+# There is 1 more ERAP2 hit when PC1 is included in the model
+# The QQ plot looks the same and has the same issues, so it's not worth interpreting
+
+# There is an equal number of hits as with the previous two models for FAHD1 
+# Are the hits the same for this third method?
+all.equal(
+  which(pval_FAHD1_w_PC1_covar < 0.05 / ncol(geno_HW_filt)), 
+  which(pval_FAHD1 < 0.05 / ncol(geno_HW_filt))
+  )
+# The FADH1 hits are the same SNPs again
+
+# There is an equal number of hits for this third analysis as for the previous one
+# Are those hits the same?
+all.equal(
+  which(pval_PEX6_w_PC1_covar < 0.05 / ncol(geno_HW_filt)), 
+  which(pval_PEX6_w_pop_num_covar < 0.05 / ncol(geno_HW_filt))
+  )
+# It is the same list of SNPs 
+
+### QQ Plot ###
+pval_PC1_covar_qqplot <- data.frame(
+  cbind(
+    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_PC1_covar$x)))),
+    ERAP2 = sort(-log10(pval_PC1_covar$ERAP2)),
+    FAHD1 = sort(-log10(pval_PC1_covar$FAHD1)),
+    GFM1 = sort(-log10(pval_PC1_covar$GFM1)),
+    MARCH7 = sort(-log10(pval_PC1_covar$MARCH7)),
+    PEX6 = sort(-log10(pval_PC1_covar$PEX6))
+    )
+  )   
+pval_PC1_covar_qqplot %>% 
+  gather("gene", "neglog10_pval", 2:6) %>% 
+  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
+  geom_point(alpha = 0.8, size = 2) +
+  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
+  xlab("Expected -log(pValue)") +
+  ylab("Observed -log(pValue)") +
+  ggtitle("QQ Plot\nLinear Regression, PC1 from full genotype PCA included as covariate\nAll Genes") +
+  ylim(0, 100)
+```
+
+So far, for each analysis, each gene was treated the same. What is the relationship of the expression level of each gene with the first few principal components? 
+
+```{r block12_pheno_PC_sig_tests, echo=FALSE, comment=NA}
+## create a nested data frame for modeling
+nested_pheno_w_full_PC <- pheno_names %>% 
+  rownames_to_column("samples") %>% 
+  # join on geno first 10 PCs from genotype PCA analysis
+  left_join(
+    geno_HW_filt_pca_x %>% 
+      dplyr::select(PC1:PC10) %>% 
+      rownames_to_column("samples"),
+    by = "samples"
+  ) %>% 
+  gather("gene", "abundance", 2:6) %>% 
+  nest(-gene)
+### Which of the phenotypes has a significant relationship with PC1? ###
+full_geno_PC1_lm <- nested_pheno_w_full_PC %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ PC1, data = .)
+      )
+    ) %>% 
+  mutate(glance_model = map(model, glance)) %>% 
+  unnest(glance_model) %>% 
+  dplyr::select(gene, p.value)
+# Which genes are significant?
+full_geno_PC1_lm[which(full_geno_PC1_lm$p.value < 0.05), ]
+# FAHD1 and PEX6
+### What about PC2? ###
+full_geno_PC2_lm <- nested_pheno_w_full_PC %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ PC2, data = .)
+      )
+    ) %>% 
+  mutate(glance_model = map(model, glance)) %>% 
+  unnest(glance_model) %>% 
+  dplyr::select(gene, p.value)
+## Which genes have a significant relationship with PC2?
+full_geno_PC2_lm[which(full_geno_PC2_lm$p.value < 0.05), ]
+# ERAP2 
+### PC3 ###
+full_geno_PC3_lm <- nested_pheno_w_full_PC %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ PC3, data = .)
+      )
+    ) %>% 
+  mutate(glance_model = map(model, glance)) %>% 
+  unnest(glance_model) %>% 
+  dplyr::select(gene, p.value)
+full_geno_PC3_lm[which(full_geno_PC3_lm$p.value < 0.05), ]
+# ERAP2 and MARCH7
+### PC4 ###
+full_geno_PC4_lm <- nested_pheno_w_full_PC %>% 
+  mutate(
+    model = map(
+      data, 
+      ~lm(abundance ~ PC4, data = .)
+      )
+    ) %>% 
+  mutate(glance_model = map(model, glance)) %>% 
+  unnest(glance_model) %>% 
+  dplyr::select(gene, p.value)
+full_geno_PC4_lm[which(full_geno_PC4_lm$p.value < 0.05), ]
+# FAHD1 has an extremely strong relationship with PC4
+# which genotypes have the largest loadings onto PC4?
+full_geno_PC4_load <- as.data.frame(geno_HW_filt_pca$rotation[, 4])
+colnames(full_geno_PC4_load) <- "loading"
+full_geno_PC4_load %>% 
+  ggplot(aes(x = loading)) +
+  geom_histogram(bins = 50)
+top_PC4_loadings <- full_geno_PC4_load %>% 
+  rownames_to_column("id") %>% 
+  filter(loading > 0.04 | loading < -0.04) %>% 
+  left_join(snp_info, by = "id") %>% 
+  arrange(chromosome, position) %>% 
+  mutate(
+    in_gene = position >= gene_info[which(gene_info$symbol == "FAHD1"), "start"] & position <= gene_info[which(gene_info$symbol == "FAHD1"), "end"] & chromosome == gene_info[which(gene_info$symbol == "FAHD1"), "chromosome"]
+    )
+unique(top_PC4_loadings$chromosome)
+summary(top_PC4_loadings$position)
+# percent in gene?
+sum(top_PC4_loadings$in_gene) / nrow(top_PC4_loadings) * 100
+# what proportion of the top loading SNPs onto PC4 are hits from earlier tests?
+sum(top_PC4_loadings$id %in% no_covar_FAHD1_hits$id) / nrow(no_covar_FAHD1_hits) * 100
+# PC4 does not seem to have obvious population structure - including it may wipe out real hits?
+```
+
+
+```{r block13_gwas_with_full_geno_mixed_PC, comment=NA, echo=FALSE}
+# PC1 - FAHD1 and PEX6
+# PC2 - ERAP2
+# PC3 - ERAP2 and MARCH7
+
+### ERAP2 ###
+# x_c - PC2 and PC3
+x_c_ERAP2_cust_PC <- cbind(pheno_with_geno_pca_x$PC2, pheno_with_geno_pca_x$PC3)
+pval_ERAP2_w_cust_PC_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$ERAP2, x_c_ERAP2_cust_PC
+  ) %>% 
+  flatten_dbl()
+### FAHD1 ###
+# x_c - PC1 (same as previous analsysis)
+pval_FAHD1_w_cust_PC_covar <- pval_FAHD1_w_PC1_covar
+### GFM1 ###
+# no PC covariates
+pval_GFM1_w_cust_PC_covar <- pval_GFM1
+### MARCH7 ###
+# x_c - PC3
+x_c_MARCH7_cust_PC <- pheno_with_geno_pca_x$PC3
+pval_MARCH7_w_cust_PC_covar <- map2(
+  data.frame(x_a), data.frame(x_d), 
+  lin_reg_fstat_w_covar, 
+  pheno_names$MARCH7, x_c_MARCH7_cust_PC
+  ) %>% 
+  flatten_dbl()
+### PEX6 ###
+# x_c - PC1 (same as previous analsysis)
+pval_PEX6_w_cust_PC_covar <- pval_PEX6_w_PC1_covar
+  
+# combined data frame
+pval_cust_PC_covar <- as.data.frame(
+  cbind(
+    x = 1:ncol(geno_HW_filt), 
+    ERAP2 = pval_ERAP2_w_cust_PC_covar,
+    FAHD1 = pval_FAHD1_w_cust_PC_covar,
+    GFM1 = pval_GFM1_w_cust_PC_covar,
+    MARCH7 = pval_MARCH7_w_cust_PC_covar,
+    PEX6 = pval_PEX6_w_cust_PC_covar
+    )
+  )
+row.names(pval_cust_PC_covar) <- colnames(geno_HW_filt)
+
+### p-value distribution ###
+pval_cust_PC_covar %>% 
+  gather("gene", "pval", 2:6) %>% 
+  ggplot(aes(x = pval, fill = gene)) +
+  geom_histogram(position = "identity", bins = 50) +
+  facet_wrap(~ gene) +
+  xlab("p-value") +
+  ylab("Count") +
+  ggtitle("Histogram of p-values\nLinear Regression, mixed PCs from full genotype PCA included as covariate\nAll Genes")
+
+### Manhattan plot ###
+pval_cust_PC_covar %>% 
+  gather("gene", "pval", 2:6) %>% 
+  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
+  geom_point(alpha = 0.8, size = 2) +
+  ggtitle("Manhattan Plot\nLinear Regression, mixed PCs from full genotype PCA included as covariate\nAll Genes") +
+  xlab("Genotype Position") +
+  ylab("-log10(pValue)") +
+  ylim(0, 100) +
+  geom_hline(yintercept = -log(0.05 / ncol(geno_HW_filt), base = 10), size = 1, alpha = 0.8)
+
+### number of statistically significant positions after Bonferroni correction ###
+pval_cust_PC_covar %>% 
+  rownames_to_column("snp") %>% 
+  dplyr::select(-x) %>% 
+  gather("gene", "pval", 2:6) %>% 
+  filter(pval < 0.05 / ncol(geno_HW_filt)) %>% 
+  group_by(gene) %>% 
+  count()
+
+### QQ Plot ###
+pval_cust_PC_covar_qqplot <- data.frame(
+  cbind(
+    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_cust_PC_covar$x)))),
+    ERAP2 = sort(-log10(pval_cust_PC_covar$ERAP2)),
+    FAHD1 = sort(-log10(pval_cust_PC_covar$FAHD1)),
+    GFM1 = sort(-log10(pval_cust_PC_covar$GFM1)),
+    MARCH7 = sort(-log10(pval_cust_PC_covar$MARCH7)),
+    PEX6 = sort(-log10(pval_cust_PC_covar$PEX6))
+    )
+  )   
+pval_cust_PC_covar_qqplot %>% 
+  gather("gene", "neglog10_pval", 2:6) %>% 
+  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
+  geom_point(alpha = 0.8, size = 2) +
+  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
+  xlab("Expected -log(pValue)") +
+  ylab("Observed -log(pValue)") +
+  ggtitle("QQ Plot\nLinear Regression, PC1 from full genotype PCA included as covariate\nAll Genes") +
+  ylim(0, 100)
+```
+
+Including more principal components and covariates does not seem to resolve the issues with the QQ Plot. Perhaps it is best to try another modeling approach.
+
+```{r block14_mixed_model, comment=NA, echo=FALSE}
+
+```
+
+
+```{r extra_plot, include=FALSE}
+pheno %>% 
+  rownames_to_column("sample") %>% 
+  gather("probe", "abundance", 2:6) %>% 
+  left_join(gene_info, by = "probe") %>% 
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample") %>% 
+  ggplot(aes(x = abundance, fill = Population)) +
+  geom_histogram(binwidth = 0.1, alpha = 0.8, position = "identity") +
+  facet_grid(Population ~ symbol)
+pheno %>% 
+  rownames_to_column("sample") %>% 
+  gather("probe", "abundance", 2:6) %>% 
+  left_join(gene_info, by = "probe") %>% 
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample") %>% 
+  ggplot(aes(x = abundance, fill = Sex)) +
+  geom_histogram(binwidth = 0.1, alpha = 0.8, position = "identity") +
+  facet_grid(Sex ~ symbol)
+pheno %>% 
+  rownames_to_column("sample") %>% 
+  gather("probe", "abundance", 2:6) %>% 
+  left_join(gene_info, by = "probe") %>% 
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample") %>% 
+  ggplot(aes(x = Sex, y = abundance, fill = Sex)) +
+  geom_boxplot() +
+  facet_wrap(~ symbol)
+pheno %>% 
+  rownames_to_column("sample") %>% 
+  gather("probe", "abundance", 2:6) %>% 
+  left_join(gene_info, by = "probe") %>% 
+  left_join(
+    covars %>% rownames_to_column("sample"), 
+    by = "sample") %>% 
+  ggplot(aes(x = Population, y = abundance, fill = Population)) +
+  geom_boxplot() +
+  facet_wrap(~ symbol)
+```
+
+```{r extra_code_and_unused_ideas, eval=FALSE}
+lm_test <- lm(pheno$ENSG00000164308.12 ~ x_a[, 1000] + x_d[, 1000] + factor(covars$Population))
+lm_tidy <- tidy(lm_test)
+fstat <- summary(lm_test)$fstatistic
+fstat_2 <- glance(lm_test)$statistic
+pf(fstat[1], fstat[2], fstat[3], lower.tail = FALSE)
+
+#Including Population and Sex as Covariates:
+x_c_pop_and_sex <- cbind(
+  as.numeric(factor(pheno_with_covars$Population)), 
+  as.numeric(factor(pheno_with_covars$Sex))
+  )
 pval_ERAP2_w_pop_and_sex_covar <- map2(
   data.frame(x_a), data.frame(x_d), 
   lin_reg_fstat_w_covar, 
@@ -559,266 +1318,6 @@ pval_pop_and_sex_covar_qqplot %>%
   ylim(0, 100)
 
 
-#summary(lm(pheno_names$FAHD1 ~ geno_pca_x$PC5))
-```
-
-Try PC1 and PC2 as covars: 
-```{r gwas_with_full_geno_PC1_PC2, comment=NA, echo=FALSE}
-pheno_with_geno_pca_x <- pheno_names %>% 
-  rownames_to_column("samples") %>% 
-  left_join(
-    geno_pca_x %>% 
-      rownames_to_column("samples"), 
-    by = "samples")
-x_c_PC1_PC2 <- cbind(pheno_with_geno_pca_x$PC1, pheno_with_geno_pca_x$PC2)
-pval_ERAP2_w_PC1_PC2_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$ERAP2, x_c_PC1_PC2
-  ) %>% 
-  flatten_dbl()
-summary(which(pval_ERAP2_w_PC1_PC2_covar < 0.05 / ncol(geno)))
-summary(which(pval_ERAP2 < 0.05 / ncol(geno)))
-
-pval_FAHD1_w_PC1_PC2_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$FAHD1, x_c_PC1_PC2
-  ) %>% 
-  flatten_dbl()
-pval_GFM1_w_PC1_PC2_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$GFM1, x_c_PC1_PC2
-  ) %>% 
-  flatten_dbl()
-pval_MARCH7_w_PC1_PC2_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$MARCH7, x_c_PC1_PC2
-  ) %>% 
-  flatten_dbl()
-pval_PEX6_w_PC1_PC2_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$PEX6, x_c_PC1_PC2
-  ) %>% 
-  flatten_dbl()
-pval_PC1_PC2_covar <- as.data.frame(
-  cbind(
-    x = 1:ncol(geno), 
-    ERAP2 = pval_ERAP2_w_PC1_PC2_covar,
-    FAHD1 = pval_FAHD1_w_PC1_PC2_covar,
-    GFM1 = pval_GFM1_w_PC1_PC2_covar,
-    MARCH7 = pval_MARCH7_w_PC1_PC2_covar,
-    PEX6 = pval_PEX6_w_PC1_PC2_covar
-    )
-  )
-row.names(pval_PC1_PC2_covar) <- colnames(geno)
-pval_PC1_PC2_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = pval, fill = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 20)
-pval_PC1_PC2_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
-  geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll genes after Including PC1 and PC2 as Covars") +
-  xlab("Genotype Position") +
-  ylab("-log10(pVal)") +
-  ylim(0, 100)
-pval_PC1_PC2_covar_qqplot <- data.frame(
-  cbind(
-    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_PC1_PC2_covar$x)))),
-    ERAP2 = sort(-log10(pval_PC1_PC2_covar$ERAP2)),
-    FAHD1 = sort(-log10(pval_PC1_PC2_covar$FAHD1)),
-    GFM1 = sort(-log10(pval_PC1_PC2_covar$GFM1)),
-    MARCH7 = sort(-log10(pval_PC1_PC2_covar$MARCH7)),
-    PEX6 = sort(-log10(pval_PC1_PC2_covar$PEX6))
-    )
-  )   
-pval_PC1_PC2_covar_qqplot %>% 
-  gather("gene", "neglog10_pval", 2:6) %>% 
-  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
-  xlab("Expected -log(pValue)") +
-  ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes with PC1 and PC2 as Covars") +
-  ylim(0, 100)
-#summary(lm(pheno_names$PEX6 ~ geno_pca_x$PC5))
-```
-
-Even more PCs
-
-```{r gwas_with_full_geno_PC1_to_PC5, comment=NA, echo=FALSE}
-x_c_PC1_thru_PC5 <- as.matrix(pheno_with_geno_pca_x[, 7:11])
-pval_ERAP2_w_PC1_thru_PC5_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$ERAP2, x_c_PC1_thru_PC5
-  ) %>% 
-  flatten_dbl()
-summary(which(pval_ERAP2_w_PC1_PC2_covar < 0.05 / ncol(geno)))
-summary(which(pval_ERAP2 < 0.05 / ncol(geno)))
-
-pval_FAHD1_w_PC1_thru_PC5_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$FAHD1, x_c_PC1_thru_PC5
-  ) %>% 
-  flatten_dbl()
-pval_GFM1_w_PC1_thru_PC5_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$GFM1, x_c_PC1_thru_PC5
-  ) %>% 
-  flatten_dbl()
-pval_MARCH7_w_PC1_thru_PC5_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$MARCH7, x_c_PC1_thru_PC5
-  ) %>% 
-  flatten_dbl()
-pval_PEX6_w_PC1_thru_PC5_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$PEX6, x_c_PC1_thru_PC5
-  ) %>% 
-  flatten_dbl()
-pval_PC1_thru_PC5_covar <- as.data.frame(
-  cbind(
-    x = 1:ncol(geno), 
-    ERAP2 = pval_ERAP2_w_PC1_thru_PC5_covar,
-    FAHD1 = pval_FAHD1_w_PC1_thru_PC5_covar,
-    GFM1 = pval_GFM1_w_PC1_thru_PC5_covar,
-    MARCH7 = pval_MARCH7_w_PC1_thru_PC5_covar,
-    PEX6 = pval_PEX6_w_PC1_thru_PC5_covar
-    )
-  )
-row.names(pval_PC1_thru_PC5_covar) <- colnames(geno)
-pval_PC1_thru_PC5_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = pval, fill = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 20)
-pval_PC1_thru_PC5_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
-  geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll genes after Including PC1 to PC5 as Covars") +
-  xlab("Genotype Position") +
-  ylab("-log10(pVal)") +
-  ylim(0, 100)
-pval_PC1_thru_PC5_covar_qqplot <- data.frame(
-  cbind(
-    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_PC1_thru_PC5_covar$x)))),
-    ERAP2 = sort(-log10(pval_PC1_thru_PC5_covar$ERAP2)),
-    FAHD1 = sort(-log10(pval_PC1_thru_PC5_covar$FAHD1)),
-    GFM1 = sort(-log10(pval_PC1_thru_PC5_covar$GFM1)),
-    MARCH7 = sort(-log10(pval_PC1_thru_PC5_covar$MARCH7)),
-    PEX6 = sort(-log10(pval_PC1_thru_PC5_covar$PEX6))
-    )
-  )   
-pval_PC1_thru_PC5_covar_qqplot %>% 
-  gather("gene", "neglog10_pval", 2:6) %>% 
-  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
-  xlab("Expected -log(pValue)") +
-  ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes with PC to PC5 as Covars") +
-  ylim(0, 100)
-```
-
-
-```{r gwas_with_filt_geno_pca_x_c, comment=NA, echo=FALSE}
-pheno_with_filt_geno_pca_x <- pheno_names %>% 
-  rownames_to_column("samples") %>% 
-  left_join(
-    geno_filt_pca_x %>% 
-      rownames_to_column("samples"), 
-    by = "samples")
-
-x_c_filt_PC1_thru_PC4 <- as.matrix(pheno_with_filt_geno_pca_x[, 7:10])
-pval_ERAP2_w_filt_PC1_thru_PC4_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$ERAP2, x_c_filt_PC1_thru_PC4
-  ) %>% 
-  flatten_dbl()
-summary(which(pval_ERAP2_w_filt_PC1_thru_PC4_covar < 0.05 / ncol(geno)))
-summary(which(pval_ERAP2 < 0.05 / ncol(geno)))
-
-pval_FAHD1_w_filt_PC1_thru_PC4_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$FAHD1, x_c_filt_PC1_thru_PC4
-  ) %>% 
-  flatten_dbl()
-pval_GFM1_w_filt_PC1_thru_PC4_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$GFM1, x_c_filt_PC1_thru_PC4
-  ) %>% 
-  flatten_dbl()
-pval_MARCH7_w_filt_PC1_thru_PC4_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$MARCH7, x_c_filt_PC1_thru_PC4
-  ) %>% 
-  flatten_dbl()
-pval_PEX6_w_filt_PC1_thru_PC4_covar <- map2(
-  data.frame(x_a), data.frame(x_d), 
-  lin_reg_fstat_w_covar, 
-  pheno_names$PEX6, x_c_filt_PC1_thru_PC4
-  ) %>% 
-  flatten_dbl()
-pval_filt_PC1_thru_PC4_covar <- as.data.frame(
-  cbind(
-    x = 1:ncol(geno), 
-    ERAP2 = pval_ERAP2_w_filt_PC1_thru_PC4_covar,
-    FAHD1 = pval_FAHD1_w_filt_PC1_thru_PC4_covar,
-    GFM1 = pval_GFM1_w_filt_PC1_thru_PC4_covar,
-    MARCH7 = pval_MARCH7_w_filt_PC1_thru_PC4_covar,
-    PEX6 = pval_PEX6_w_filt_PC1_thru_PC4_covar
-    )
-  )
-row.names(pval_filt_PC1_thru_PC4_covar) <- colnames(geno)
-pval_filt_PC1_thru_PC4_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = pval, fill = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 20)
-pval_filt_PC1_thru_PC4_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
-  geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll genes after Including PC1 to PC5 as Covars") +
-  xlab("Genotype Position") +
-  ylab("-log10(pVal)") +
-  ylim(0, 100)
-pval_filt_PC1_thru_PC4_covar_qqplot <- data.frame(
-  cbind(
-    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(pval_filt_PC1_thru_PC4_covar$x)))),
-    ERAP2 = sort(-log10(pval_filt_PC1_thru_PC4_covar$ERAP2)),
-    FAHD1 = sort(-log10(pval_filt_PC1_thru_PC4_covar$FAHD1)),
-    GFM1 = sort(-log10(pval_filt_PC1_thru_PC4_covar$GFM1)),
-    MARCH7 = sort(-log10(pval_filt_PC1_thru_PC4_covar$MARCH7)),
-    PEX6 = sort(-log10(pval_filt_PC1_thru_PC4_covar$PEX6))
-    )
-  )   
-pval_filt_PC1_thru_PC4_covar_qqplot %>% 
-  gather("gene", "neglog10_pval", 2:6) %>% 
-  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
-  xlab("Expected -log(pValue)") +
-  ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes with filtered PC1 to PC4 as Covars") +
-  ylim(0, 100)
-```
-
-
-```{r x_a_and_x_d_pca, comment=NA, echo=FALSE}
 xa_pca <- prcomp(x_a, center = TRUE, scale. = TRUE)
 plot((xa_pca$sdev^2/ sum(xa_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
 xa_pca_x <- data.frame(xa_pca$x)
@@ -828,8 +1327,10 @@ xa_pca_x %>%
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
     geom_point(size = 2, alpha = 0.8) +
     ggtitle("First two principal components of X_a matrix, colored by Population")
-plot(geno_pca_x$PC1, xa_pca_x$PC1)
-plot(geno_pca_x$PC2, xa_pca_x$PC2)
+plot(geno_HW_filt_pca_x$PC1, xa_pca_x$PC1)
+abline(a = 0, b = 1)
+plot(geno_HW_filt_pca_x$PC2, xa_pca_x$PC2)
+abline(a = 0, b = 1)
 
 xd_pca <- prcomp(x_d, center = TRUE, scale. = TRUE)
 plot((xd_pca$sdev^2/ sum(xd_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
@@ -840,224 +1341,9 @@ xd_pca_x %>%
   ggplot(aes(x = PC1, y = PC2, color = Population)) +
     geom_point(size = 2, alpha = 0.8) +
     ggtitle("First two principal components of X_d matrix, colored by Population")
-plot(geno_pca_x$PC1, xd_pca_x$PC1) + abline(a = 0, b = 1)
-plot(geno_pca_x$PC2, xd_pca_x$PC2) + abline(a = 0, b = 1)
+plot(geno_HW_filt_pca_x$PC1, xd_pca_x$PC1) 
+abline(a = 0, b = 1)
+plot(geno_HW_filt_pca_x$PC2, xd_pca_x$PC2) 
+abline(a = 0, b = 1)
+
 ```
-
-
-
-```{r HW_package_tests, comment=NA, echo=FALSE}
-library(HardyWeinberg)
-HWChisq(table(geno$rs10399749))
-
-nAA <- 303
-nAa <- 41
-naa <- 0
-n <- nAA + nAa + naa
-pA <- ( 2 * nAA + nAa) / (2 * n)
-pa <- 1 - pA
-obs <- c(nAA, nAa, naa)
-exp <- c(n * pA * pA, 2 * n * pA * pa, n * pa ^ 2)
-sum(((obs-exp)^2)/exp)
-
-1 - pchisq(1.381394 , df=1)
-
-test_HW <- map(geno, function(x) HWChisq(table(factor(x, levels = c(0, 1, 2))), cc = 0, verbose = FALSE))
-HWChisq(table(factor(geno$rs7450414, levels = c(0, 1, 2))), cc = 0)
-
-test_HW2 <- purrr::transpose(test_HW)
-test_HW_simple <- data.frame(unlist(test_HW2$pval))
-colnames(test_HW_simple) <- "pvalue"
-test_HW_simple$position <- 1:nrow(test_HW_simple)
-test_HW_simple %>% 
-  ggplot(aes(x = pvalue)) +
-  geom_histogram(bins = 50)
-test_HW_simple %>% 
-  ggplot(aes(x = position, y = -log(pvalue, base = 10))) +
-  geom_point() +
-  geom_hline(yintercept = -log(0.05, base = 10), color = "red") +
-  geom_hline(yintercept = -log(0.05 / ncol(geno), base = 10), color = "blue")
-length(which(test_HW_simple < 0.05 / ncol(geno)))
-length(which(test_HW_simple < 0.05))
-```
-
-
-```{r}
-indv_HW <- map(data.frame(t(geno)), function(x) HWChisq(table(factor(x, levels = c(0, 1, 2))), cc = 0, verbose = FALSE))
-HWChisq(table(factor(t(geno[ 1,]), levels = c(0, 1, 2))), cc = 0.5)
-indv_HW2 <- purrr::transpose(indv_HW )
-indv_HW_simple <- data.frame(unlist(indv_HW2$pval))
-indv_HW_f <- data.frame(unlist(indv_HW2$f))
-colnames(indv_HW_simple) <- "pvalue"
-colnames(indv_HW_f) <- "f_value"
-indv_HW_simple$position <- 1:nrow(indv_HW_simple)
-indv_HW_f$position <- 1:nrow(indv_HW_f)
-indv_HW_simple %>% 
-  ggplot(aes(x = pvalue)) +
-  geom_histogram(bins = 50)
-indv_HW_f %>% 
-  ggplot(aes(x = f_value)) +
-  geom_histogram(bins = 50)
-```
-
-
-
-```{r geno_filtered_on_HW_genes, comment=NA, echo=FALSE}
-geno_HW_filt <- geno[, which(test_HW_simple$pvalue >= 0.05)]
-
-# PCA
-geno_HW_filt_pca <- prcomp(geno_HW_filt, center = TRUE, scale. = TRUE)
-plot((geno_HW_filt_pca$sdev ^ 2/ sum(geno_HW_filt_pca$sdev ^ 2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
-geno_HW_filt_pca_x <- data.frame(geno_HW_filt_pca$x)
-geno_HW_filt_pca_x %>% 
-  rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
-  ggplot(aes(x = PC1, y = PC2, color = Sex)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Sex")
-geno_HW_filt_pca_x %>% 
-  rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
-  ggplot(aes(x = PC1, y = PC2, color = Population)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Population")
-indv_HW_filt_pca <- prcomp(t(geno_HW_filt_pca_x), center = TRUE, scale. = TRUE)
-indv_HW_filt_pca_x <- as.data.frame(indv_HW_filt_pca$rotation) %>% 
-  rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample")
-indv_HW_filt_pca_x %>% 
-  ggplot(aes(x = PC1, y = PC2, color = Population)) +
-  geom_point(size = 2, alpha = 0.8)
-# filtered PCA
-geno_HW_filt_every10_pca <- prcomp(geno[, seq.int(from = 1, to = ncol(geno_HW_filt), by = 10)], center = TRUE, scale. = TRUE)
-plot((geno_HW_filt_every10_pca$sdev^2/ sum(geno_HW_filt_every10_pca$sdev^2)) * 100, xlab = "Principal Component", ylab = "Percent of total variance explained")
-geno_HW_filt_every10_pca_x <- data.frame(geno_HW_filt_every10_pca$x)
-geno_HW_filt_every10_pca_x %>% 
-  rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
-  ggplot(aes(x = PC1, y = PC2, color = Sex)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Sex")
-geno_HW_filt_every10_pca_x %>% 
-  rownames_to_column("sample") %>% 
-  left_join(covars %>% rownames_to_column("sample"), by = "sample") %>% 
-  ggplot(aes(x = PC1, y = PC2, color = Population)) +
-    geom_point(size = 2, alpha = 0.8) +
-    ggtitle("First two principal components, colored by Population")
-```
-
-Try just a lin reg and F-test with no covars after filtering.
-
-```{r gwas_HW_filt_geno_simpl_lin_reg, comment=NA, echo=FALSE}
-x_a_HW_filt <- as.matrix(geno_HW_filt - 1)
-x_d_HW_filt <- replace(as.matrix(geno_HW_filt), which(as.matrix(geno_HW_filt) == 2 | as.matrix(geno_HW_filt) == 0), -1)
-# ERAP2
-HW_filt_pval_ERAP2 <- lin_reg_p_val(x_a_HW_filt, x_d_HW_filt, pheno_names$ERAP2)
-# FAHD1
-HW_filt_pval_FAHD1 <- lin_reg_p_val(x_a_HW_filt, x_d_HW_filt, pheno_names$FAHD1)
-# GFM1
-HW_filt_pval_GFM1 <- lin_reg_p_val(x_a_HW_filt, x_d_HW_filt, pheno_names$GFM1)
-# MARCH7
-HW_filt_pval_MARCH7 <- lin_reg_p_val(x_a_HW_filt, x_d_HW_filt, pheno_names$MARCH7)
-# PEX6
-HW_filt_pval_PEX6 <- lin_reg_p_val(x_a_HW_filt, x_d_HW_filt, pheno_names$PEX6)
-# combined data frame 
-HW_filt_pval_no_covar <- as.data.frame(
-  cbind(
-    x = 1:ncol(geno_HW_filt), 
-    ERAP2 = HW_filt_pval_ERAP2,
-    FAHD1 = HW_filt_pval_FAHD1,
-    GFM1 = HW_filt_pval_GFM1,
-    MARCH7 = HW_filt_pval_MARCH7,
-    PEX6 = HW_filt_pval_PEX6
-    )
-  )
-row.names(HW_filt_pval_no_covar) <- colnames(geno_HW_filt)
-HW_filt_pval_no_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = pval, color = gene)) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 50)
-HW_filt_pval_no_covar %>% 
-  gather("gene", "pval", 2:6) %>% 
-  ggplot(aes(x = x, y = -log(pval, base = 10), color = gene)) +
-  geom_point(alpha = 0.8, size = 2) +
-  ggtitle("Manhattan Plot\nAll Genes") +
-  xlab("Genotype Position") +
-  ylab("-log10(pVal)")
-HW_filt_pval_no_covar_qqplot <- data.frame(
-  cbind(
-    expected = sort(-log10(seq(from = 0,to = 1, length.out = length(HW_filt_pval_no_covar$x)))),
-    ERAP2 = sort(-log10(HW_filt_pval_no_covar$ERAP2)),
-    FAHD1 = sort(-log10(HW_filt_pval_no_covar$FAHD1)),
-    GFM1 = sort(-log10(HW_filt_pval_no_covar$GFM1)),
-    MARCH7 = sort(-log10(HW_filt_pval_no_covar$MARCH7)),
-    PEX6 = sort(-log10(HW_filt_pval_no_covar$PEX6))
-    )
-  )
-HW_filt_pval_no_covar_qqplot %>% 
-  gather("gene", "neglog10_pval", 2:6) %>% 
-  ggplot(aes(x = expected, y = neglog10_pval, color = gene)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, col = "black", alpha = 0.5, size = 2) +
-  xlab("Expected -log(pValue)") +
-  ylab("Observed -log(pValue)") +
-  ggtitle("QQ Plot\nAll Genes") +
-  ylim(0, 100)
-```
-
-
-
-
-
-```{r extra_plot, include=FALSE}
-pheno %>% 
-  rownames_to_column("sample") %>% 
-  gather("probe", "abundance", 2:6) %>% 
-  left_join(gene_info, by = "probe") %>% 
-  left_join(
-    covars %>% rownames_to_column("sample"), 
-    by = "sample") %>% 
-  ggplot(aes(x = abundance, fill = Population)) +
-  geom_histogram(binwidth = 0.1, alpha = 0.8, position = "identity") +
-  facet_grid(Population ~ symbol)
-pheno %>% 
-  rownames_to_column("sample") %>% 
-  gather("probe", "abundance", 2:6) %>% 
-  left_join(gene_info, by = "probe") %>% 
-  left_join(
-    covars %>% rownames_to_column("sample"), 
-    by = "sample") %>% 
-  ggplot(aes(x = abundance, fill = Sex)) +
-  geom_histogram(binwidth = 0.1, alpha = 0.8, position = "identity") +
-  facet_grid(Sex ~ symbol)
-pheno %>% 
-  rownames_to_column("sample") %>% 
-  gather("probe", "abundance", 2:6) %>% 
-  left_join(gene_info, by = "probe") %>% 
-  left_join(
-    covars %>% rownames_to_column("sample"), 
-    by = "sample") %>% 
-  ggplot(aes(x = Sex, y = abundance, fill = Sex)) +
-  geom_boxplot() +
-  facet_wrap(~ symbol)
-pheno %>% 
-  rownames_to_column("sample") %>% 
-  gather("probe", "abundance", 2:6) %>% 
-  left_join(gene_info, by = "probe") %>% 
-  left_join(
-    covars %>% rownames_to_column("sample"), 
-    by = "sample") %>% 
-  ggplot(aes(x = Population, y = abundance, fill = Population)) +
-  geom_boxplot() +
-  facet_wrap(~ symbol)
-```
-
-
-```{r extra_code_and_unused_ideas, eval=FALSE}
-lm_test <- lm(pheno$ENSG00000164308.12 ~ x_a[, 1000] + x_d[, 1000] + factor(covars$Population))
-lm_tidy <- tidy(lm_test)
-fstat <- summary(lm_test)$fstatistic
-fstat_2 <- glance(lm_test)$statistic
-pf(fstat[1], fstat[2], fstat[3], lower.tail = FALSE)
-```
-
